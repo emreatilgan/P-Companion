@@ -14,7 +14,7 @@ class Config:
         # Training parameters
         self.BATCH_SIZE = 256
         self.LEARNING_RATE = 0.001
-        self.NUM_EPOCHS = 100
+        self.NUM_EPOCHS = 20
         self.MARGIN = 1.0             # Margin parameters (λ, ϵ)
         self.ALPHA = 0.8              # Trade-off parameter between type and item prediction
         self.NUM_COMP_TYPES = 3       # Number of complementary types to predict

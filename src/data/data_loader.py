@@ -2,10 +2,14 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from collections import defaultdict
-from synthetic_data import SyntheticDataGenerator
+from typing import Dict, List, Tuple, Optional
+
+from src.data.synthetic_data import SyntheticDataGenerator
+from src.data.bpg import BehaviorProductGraph
+from config import Config
 
 class BPGDataset(Dataset):
-    def __init__(self, bpg, config, mode='train'):
+    def __init__(self, bpg: BehaviorProductGraph, config: 'Config', mode: str = 'train'):
         self.bpg = bpg
         self.config = config
         self.mode = mode
@@ -17,7 +21,7 @@ class BPGDataset(Dataset):
         self.type_to_idx = {t: i for i, t in enumerate(bpg.get_all_types())}
         self.idx_to_type = {i: t for t, i in self.type_to_idx.items()}
         
-    def _create_product_pairs(self):
+    def _create_product_pairs(self) -> List[Tuple[str, str, int]]:
         """Create training pairs based on behavior data"""
         pairs = []
         
@@ -27,13 +31,20 @@ class BPGDataset(Dataset):
         # Negative pairs from co-view intersection
         negative_pairs = self.bpg.get_co_view_intersection_pairs()
         
-        for query_id, target_id, label in positive_pairs + negative_pairs:
-            if query_id in self.bpg.nodes and target_id in self.bpg.nodes:
-                pairs.append((query_id, target_id, label))
+        # Combine positive and negative pairs
+        all_pairs = positive_pairs + negative_pairs
+        
+        # Split data based on mode
+        if self.mode == 'train':
+            pairs = all_pairs[:int(len(all_pairs) * 0.8)]
+        elif self.mode == 'val':
+            pairs = all_pairs[int(len(all_pairs) * 0.8):int(len(all_pairs) * 0.9)]
+        else:  # test
+            pairs = all_pairs[int(len(all_pairs) * 0.9):]
         
         return pairs
     
-    def _get_neighbor_features(self, product_id):
+    def _get_neighbor_features(self, product_id: str) -> Optional[torch.Tensor]:
         """Get aggregated neighbor features for a product"""
         neighbors = self.bpg.get_neighbors(product_id)
         if not neighbors:
@@ -48,10 +59,10 @@ class BPGDataset(Dataset):
             return torch.stack(neighbor_features)
         return None
     
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.pairs)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         query_id, target_id, label = self.pairs[idx]
         
         # Get product features
@@ -62,31 +73,37 @@ class BPGDataset(Dataset):
         query_type = self.type_to_idx[self.bpg.nodes[query_id]['type']]
         target_type = self.type_to_idx[self.bpg.nodes[target_id]['type']]
         
+        # Create tensors for types
+        positive_types = torch.tensor([[target_type if label == 1 else 0]])
+        negative_types = torch.tensor([[target_type if label == -1 else min(target_type + 1, len(self.type_to_idx) - 1)]])
+        
         # Get neighbor features
         query_neighbors = self._get_neighbor_features(query_id)
         
         sample = {
             'query_features': query_features,
             'target_features': target_features,
-            'query_type': query_type,
-            'target_type': target_type,
-            'label': label
+            'query_types': torch.tensor(query_type),
+            'positive_types': positive_types,
+            'negative_types': negative_types,
+            'positive_items': target_features if label == 1 else torch.randn_like(target_features),
+            'negative_items': target_features if label == -1 else torch.randn_like(target_features)
         }
         
         if query_neighbors is not None:
             sample['query_neighbor_features'] = query_neighbors
             
         return sample
-    
+
 class SyntheticBPGDataset(BPGDataset):
-    def __init__(self, config, mode='train'):
+    def __init__(self, config: 'Config', mode: str = 'train'):
         # Generate synthetic data
         generator = SyntheticDataGenerator(config)
-        self.bpg = generator.generate_bpg()
+        bpg = generator.generate_bpg()
         
-        super().__init__(self.bpg, config, mode)
+        super().__init__(bpg, config, mode)
 
-def collate_fn(batch):
+def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     """Custom collate function to handle variable-sized neighbor features"""
     batch_dict = defaultdict(list)
     
@@ -99,4 +116,4 @@ def collate_fn(batch):
         if key != 'query_neighbor_features':
             batch_dict[key] = torch.stack(batch_dict[key])
     
-    return batch_dict
+    return dict(batch_dict)

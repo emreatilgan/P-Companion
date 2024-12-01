@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as Fa
-from product2vec import Product2Vec
-from type_transition import ComplementaryTypeTransition
-from item_prediction import ComplementaryItemPrediction
+import torch.nn.functional as F
+
+from .product2vec import Product2Vec
+from .type_transition import ComplementaryTypeTransition
+from .item_prediction import ComplementaryItemPrediction
 
 class PCompanion(nn.Module):
     def __init__(self, config):
@@ -26,9 +27,6 @@ class PCompanion(nn.Module):
         )
         
     def forward(self, batch):
-        """
-        Full forward pass through P-Companion
-        """
         # Get product embeddings
         query_embeddings = self.product2vec(
             batch['query_features'],
@@ -80,7 +78,6 @@ class PCompanion(nn.Module):
         return self.config.ALPHA * item_loss + (1 - self.config.ALPHA) * type_loss
 
     def _compute_type_loss(self, type_similarities, positive_types, negative_types):
-        """Compute hinge loss for type transition"""
         positive_scores = type_similarities.gather(1, positive_types)
         negative_scores = type_similarities.gather(1, negative_types)
         
@@ -91,7 +88,6 @@ class PCompanion(nn.Module):
         return loss
 
     def _compute_item_loss(self, projected_embeddings, positive_items, negative_items):
-        """Compute hinge loss for item prediction"""
         pos_distances = torch.norm(
             projected_embeddings - positive_items.unsqueeze(1),
             dim=-1

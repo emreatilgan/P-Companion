@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from collections import defaultdict
+from synthetic_data import SyntheticDataGenerator
 
 class BPGDataset(Dataset):
     def __init__(self, bpg, config, mode='train'):
@@ -76,6 +77,14 @@ class BPGDataset(Dataset):
             sample['query_neighbor_features'] = query_neighbors
             
         return sample
+    
+class SyntheticBPGDataset(BPGDataset):
+    def __init__(self, config, mode='train'):
+        # Generate synthetic data
+        generator = SyntheticDataGenerator(config)
+        self.bpg = generator.generate_bpg()
+        
+        super().__init__(self.bpg, config, mode)
 
 def collate_fn(batch):
     """Custom collate function to handle variable-sized neighbor features"""

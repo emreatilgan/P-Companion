@@ -6,10 +6,10 @@ from tqdm import tqdm
 import os
 
 from config import Config
-from models.p_companion import PCompanion
-from data.data_loader import BPGDataset, collate_fn
-from data.bpg import BehaviorProductGraph
-from utils.metrics import Metrics
+from src.models.p_companion import PCompanion
+from src.data.data_loader import BPGDataset, SyntheticBPGDataset, collate_fn
+from src.data.bpg import BehaviorProductGraph
+from src.utils.metrics import Metrics
 
 def train(config):
     # Set up logging
@@ -97,11 +97,29 @@ def main():
     # Initialize config
     config = Config()
     
-    # Create model directory if it doesn't exist
-    os.makedirs(config.MODEL_DIR, exist_ok=True)
+    # Create synthetic dataset
+    train_dataset = SyntheticBPGDataset(config, mode='train')
+    val_dataset = SyntheticBPGDataset(config, mode='val')
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=4
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=4
+    )
     
     # Start training
-    train(config)
+    train(config, train_loader, val_loader)
 
 if __name__ == "__main__":
     main()

@@ -6,40 +6,14 @@ from tqdm import tqdm
 import os
 
 from config import Config
-from models.p_companion import PCompanion
-from data.data_loader import BPGDataset, collate_fn
-from data.bpg import BehaviorProductGraph
-from utils.metrics import Metrics
+from src.models.p_companion import PCompanion
+from src.data.data_loader import SyntheticBPGDataset, collate_fn
+from src.utils.metrics import Metrics
 
-def train(config):
+def train(config, train_loader, val_loader):
     # Set up logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    
-    # Initialize BPG and dataset
-    bpg = BehaviorProductGraph()
-    # Load your data into BPG here
-    
-    # Create datasets
-    train_dataset = BPGDataset(bpg, config, mode='train')
-    val_dataset = BPGDataset(bpg, config, mode='val')
-    
-    # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=4
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=4
-    )
     
     # Initialize model
     model = PCompanion(config).to(config.DEVICE)
@@ -100,8 +74,29 @@ def main():
     # Create model directory if it doesn't exist
     os.makedirs(config.MODEL_DIR, exist_ok=True)
     
+    # Create synthetic datasets
+    train_dataset = SyntheticBPGDataset(config, mode='train')
+    val_dataset = SyntheticBPGDataset(config, mode='val')
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=2
+    )
+    
     # Start training
-    train(config)
+    train(config, train_loader, val_loader)
 
 if __name__ == "__main__":
     main()

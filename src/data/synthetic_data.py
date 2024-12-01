@@ -4,6 +4,8 @@ from typing import Dict, List, Tuple
 import random
 from collections import defaultdict
 
+from src.data.bpg import BehaviorProductGraph
+
 class SyntheticDataGenerator:
     def __init__(self, config):
         self.config = config
@@ -34,15 +36,6 @@ class SyntheticDataGenerator:
             f"type_{i}_{category}"
             for category in ['electronics', 'clothing', 'sports', 'home', 'office']
             for i in range(self.num_types // 5)
-        ]
-        
-        # Create complementary type relationships
-        complementary_pairs = [
-            ('electronics', 'accessories'),
-            ('clothing', 'shoes'),
-            ('sports', 'equipment'),
-            ('home', 'decor'),
-            ('office', 'supplies')
         ]
         
         for pid in range(self.num_products):
@@ -89,7 +82,7 @@ class SyntheticDataGenerator:
             
             # Get candidate complementary products
             category = product['type'].split('_')[2]
-            complementary_categories = complementary_patterns[category]
+            complementary_categories = complementary_patterns.get(category, [category])
             
             candidate_products = [
                 p_id for p_id, p in self.products.items()
@@ -99,8 +92,10 @@ class SyntheticDataGenerator:
             
             if candidate_products:
                 # Generate co-purchase relationships
-                complement_ids = random.sample(candidate_products, 
-                                            min(num_complements, len(candidate_products)))
+                complement_ids = random.sample(
+                    candidate_products,
+                    min(num_complements, len(candidate_products))
+                )
                 for comp_id in complement_ids:
                     behaviors['co_purchase'].append((pid, comp_id))
                     
@@ -114,10 +109,8 @@ class SyntheticDataGenerator:
         
         return behaviors
     
-    def generate_bpg(self) -> 'BehaviorProductGraph':
+    def generate_bpg(self) -> BehaviorProductGraph:
         """Generate BehaviorProductGraph from synthetic data"""
-        from data.bpg import BehaviorProductGraph
-        
         bpg = BehaviorProductGraph()
         
         # Add nodes (products)

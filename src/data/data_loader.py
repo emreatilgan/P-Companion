@@ -56,6 +56,7 @@ class BPGDataset(Dataset):
                 neighbor_features.append(self.bpg.nodes[n_id]['features'])
         
         if neighbor_features:
+            # Stack neighbor features into a single tensor
             return torch.stack(neighbor_features)
         return None
     
@@ -109,9 +110,17 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     
     for sample in batch:
         for key, value in sample.items():
-            batch_dict[key].append(value)
+            # Special handling for neighbor features
+            if key == 'query_neighbor_features':
+                if value is not None:
+                    # Ensure it's a tensor
+                    if not isinstance(value, torch.Tensor):
+                        value = torch.stack(value)
+                batch_dict[key].append(value)
+            else:
+                batch_dict[key].append(value)
     
-    # Stack tensors
+    # Stack all tensors except neighbor features
     for key in batch_dict:
         if key != 'query_neighbor_features':
             batch_dict[key] = torch.stack(batch_dict[key])

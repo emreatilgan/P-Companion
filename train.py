@@ -84,7 +84,7 @@ def main():
         batch_size=config.BATCH_SIZE,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=4
+        num_workers=2
     )
     
     val_loader = DataLoader(
@@ -92,7 +92,7 @@ def main():
         batch_size=config.BATCH_SIZE,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4
+        num_workers=2
     )
     
     # Start training

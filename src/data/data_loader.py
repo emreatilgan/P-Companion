@@ -74,23 +74,21 @@ class BPGDataset(Dataset):
         query_type = self.type_to_idx[self.bpg.nodes[query_id]['type']]
         target_type = self.type_to_idx[self.bpg.nodes[target_id]['type']]
         
-        # Create tensors for types
-        positive_types = torch.tensor([[target_type if label == 1 else 0]])
-        negative_types = torch.tensor([[target_type if label == -1 else min(target_type + 1, len(self.type_to_idx) - 1)]])
-        
-        # Get neighbor features
-        query_neighbors = self._get_neighbor_features(query_id)
-        
+        # Create sample with proper dimensions
         sample = {
             'query_features': query_features,
             'target_features': target_features,
-            'query_types': torch.tensor(query_type),
-            'positive_types': positive_types,
-            'negative_types': negative_types,
+            'query_types': torch.tensor(query_type),  # [1]
+            'positive_types': torch.tensor(target_type if label == 1 else 0),  # [1]
+            'negative_types': torch.tensor(target_type if label == -1 else 
+                                        min(target_type + 1, len(self.type_to_idx) - 1)),  # [1]
             'positive_items': target_features if label == 1 else torch.randn_like(target_features),
-            'negative_items': target_features if label == -1 else torch.randn_like(target_features)
+            'negative_items': target_features if label == -1 else torch.randn_like(target_features),
+            'label': torch.tensor(label)
         }
         
+        # Get neighbor features
+        query_neighbors = self._get_neighbor_features(query_id)
         if query_neighbors is not None:
             sample['query_neighbor_features'] = query_neighbors
             
@@ -112,15 +110,11 @@ def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         for key, value in sample.items():
             # Special handling for neighbor features
             if key == 'query_neighbor_features':
-                if value is not None:
-                    # Ensure it's a tensor
-                    if not isinstance(value, torch.Tensor):
-                        value = torch.stack(value)
-                batch_dict[key].append(value)
+                batch_dict[key].append(value if value is not None else torch.tensor([]))
             else:
                 batch_dict[key].append(value)
     
-    # Stack all tensors except neighbor features
+    # Stack tensors
     for key in batch_dict:
         if key != 'query_neighbor_features':
             batch_dict[key] = torch.stack(batch_dict[key])

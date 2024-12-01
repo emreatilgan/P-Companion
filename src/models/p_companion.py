@@ -56,17 +56,15 @@ class PCompanion(nn.Module):
         return {
             'projected_embeddings': projected_embeddings,
             'complementary_types': top_k_types.indices,
-            'type_similarities': top_k_types.values
+            'type_similarities': similarities  # Return full similarities
         }
 
     def compute_loss(self, batch, outputs):
-        """
-        Compute combined loss for type transition and item prediction
-        """
+        """Compute combined loss for type transition and item prediction"""
         type_loss = self._compute_type_loss(
             outputs['type_similarities'],
-            batch['positive_types'],
-            batch['negative_types']
+            batch['positive_types'].squeeze(-1),  # Remove extra dimension
+            batch['negative_types'].squeeze(-1)   # Remove extra dimension
         )
         
         item_loss = self._compute_item_loss(
@@ -78,8 +76,15 @@ class PCompanion(nn.Module):
         return self.config.ALPHA * item_loss + (1 - self.config.ALPHA) * type_loss
 
     def _compute_type_loss(self, type_similarities, positive_types, negative_types):
-        positive_scores = type_similarities.gather(1, positive_types)
-        negative_scores = type_similarities.gather(1, negative_types)
+        """Compute hinge loss for type transition
+        
+        Args:
+            type_similarities: [batch_size, num_types]
+            positive_types: [batch_size]
+            negative_types: [batch_size]
+        """
+        positive_scores = type_similarities[torch.arange(type_similarities.size(0)), positive_types]
+        negative_scores = type_similarities[torch.arange(type_similarities.size(0)), negative_types]
         
         loss = torch.mean(torch.clamp(
             self.config.MARGIN - positive_scores + negative_scores,
@@ -88,6 +93,7 @@ class PCompanion(nn.Module):
         return loss
 
     def _compute_item_loss(self, projected_embeddings, positive_items, negative_items):
+        """Compute hinge loss for item prediction"""
         pos_distances = torch.norm(
             projected_embeddings - positive_items.unsqueeze(1),
             dim=-1

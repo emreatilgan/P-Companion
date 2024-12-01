@@ -33,33 +33,42 @@ def test_synthetic_data_generation():
 
 def test_model_with_synthetic_data():
     config = Config()
+    config.NUM_COMP_TYPES = 3  # Set explicitly for test
     generator = SyntheticDataGenerator(config)
     bpg = generator.generate_bpg()
     
     # Create model
     model = PCompanion(config)
     
-    # Create sample batch
+    # Create sample batch with proper dimensions
+    batch_size = 2
     sample_batch = {
-        'query_features': torch.randn(2, config.PRODUCT_EMB_DIM),
+        'query_features': torch.randn(batch_size, config.PRODUCT_EMB_DIM),
         'query_types': torch.tensor([0, 1]),
-        'target_features': torch.randn(2, config.PRODUCT_EMB_DIM),
-        'positive_types': torch.tensor([[1], [2]]),
-        'negative_types': torch.tensor([[3], [4]]),
-        'positive_items': torch.randn(2, config.PRODUCT_EMB_DIM),
-        'negative_items': torch.randn(2, config.PRODUCT_EMB_DIM)
+        'target_features': torch.randn(batch_size, config.PRODUCT_EMB_DIM),
+        # Make sure positive and negative type indices are within NUM_COMP_TYPES range
+        'positive_types': torch.tensor([[0], [1]]),
+        'negative_types': torch.tensor([[1], [2]]),
+        'positive_items': torch.randn(batch_size, config.PRODUCT_EMB_DIM),
+        'negative_items': torch.randn(batch_size, config.PRODUCT_EMB_DIM)
     }
     
     # Test forward pass
     outputs = model(sample_batch)
     assert 'projected_embeddings' in outputs
     assert 'complementary_types' in outputs
+    assert outputs['complementary_types'].shape[1] == config.NUM_COMP_TYPES
     assert 'type_similarities' in outputs
+    assert outputs['type_similarities'].shape[1] == config.NUM_COMP_TYPES
     
     # Test loss computation
     loss = model.compute_loss(sample_batch, outputs)
     assert isinstance(loss, torch.Tensor)
     assert loss.requires_grad
+    # Test that loss is scalar
+    assert loss.dim() == 0
+    # Test that loss is positive
+    assert loss.item() >= 0
 
 if __name__ == "__main__":
     pytest.main([__file__])

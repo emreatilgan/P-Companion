@@ -1,6 +1,7 @@
 # P-Companion: Diversified Complementary Product Recommendation
 
 This is an implementation of the paper "P-Companion: A Principled Framework for Diversified Complementary Product Recommendation".
+https://assets.amazon.science/d5/16/3f7809974a899a11bacdadefdf24/p-companion-a-principled-framework-for-diversified-complementary-product-recommendation.pdf
 
 ## Features
 
@@ -23,6 +24,7 @@ This is an implementation of the paper "P-Companion: A Principled Framework for 
 │   ├── data/
 │   │   ├── data_loader.py
 │   │   └── bpg.py
+│   │   └── synthetic_data.py
 │   └── utils/
 │       ├── metrics.py
 │       ├── constants.py
@@ -58,24 +60,9 @@ To train the model:
 python train.py
 ```
 
-### Inference
-
-To run inference:
-
-```bash
-python inference.py --query_id <product_id>
-```
-
 ## Requirements
 
 See `requirements.txt` for detailed dependencies:
-
-```
-torch>=1.9.0
-numpy>=1.19.2
-tqdm>=4.50.0
-tensorboard>=2.4.0
-```
 
 ## Evaluation Metrics
 

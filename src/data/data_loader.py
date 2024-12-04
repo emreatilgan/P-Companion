@@ -1,3 +1,4 @@
+# src/data/data_loader.py
 import torch
 from torch.utils.data import Dataset, DataLoader
 import random
@@ -95,3 +96,107 @@ class SimilarityDataset(Dataset):
         if neighbor_features:
             return torch.stack(neighbor_features)
         return None
+
+class ComplementaryDataset(Dataset):
+    """Dataset for training P-Companion with complementary product pairs"""
+    
+    def __init__(self, bpg: 'BehaviorProductGraph', config: 'Config', mode: str = 'train'):
+        self.bpg = bpg
+        self.config = config
+        self.mode = mode
+        
+        # Get complementary pairs from BPG
+        self.pairs = self._create_product_pairs()
+        
+        # Create type mappings
+        self.type_to_idx = {t: i for i, t in enumerate(bpg.get_all_types())}
+        self.idx_to_type = {i: t for t, i in self.type_to_idx.items()}
+        
+    def _create_product_pairs(self) -> List[Tuple[str, str, int]]:
+        """Create training pairs based on behavior data"""
+        all_pairs = []
+        
+        # Positive pairs from exclusive co-purchase data
+        positive_pairs = [(src, tgt, 1) for src, tgt in self.bpg.edges['co_purchase']
+                         if (src, tgt) not in self.bpg.edges['co_view']]
+        
+        # Negative pairs from co-view ∩ purchase-after-view
+        co_view = set(self.bpg.edges['co_view'])
+        pav = set(self.bpg.edges['purchase_after_view'])
+        negative_pairs = [(src, tgt, -1) for src, tgt in (co_view & pav)]
+        
+        all_pairs.extend(positive_pairs)
+        all_pairs.extend(negative_pairs)
+        random.shuffle(all_pairs)
+        
+        # Split based on mode
+        total = len(all_pairs)
+        if self.mode == 'train':
+            return all_pairs[:int(0.8 * total)]
+        elif self.mode == 'val':
+            return all_pairs[int(0.8 * total):int(0.9 * total)]
+        else:  # test
+            return all_pairs[int(0.9 * total):]
+    
+    def __len__(self) -> int:
+        return len(self.pairs)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        query_id, target_id, label = self.pairs[idx]
+        
+        # Get product features
+        query_features = self.bpg.nodes[query_id]['features']
+        target_features = self.bpg.nodes[target_id]['features']
+        
+        # Get product types
+        query_type = self.type_to_idx[self.bpg.nodes[query_id]['type']]
+        target_type = self.type_to_idx[self.bpg.nodes[target_id]['type']]
+        
+        sample = {
+            'query_ids': query_id,
+            'query_features': query_features,
+            'target_features': target_features,
+            'query_types': torch.tensor(query_type),
+            'positive_types': torch.tensor([target_type if label == 1 else 0]),
+            'negative_types': torch.tensor([target_type if label == -1 else 
+                                          (target_type + 1) % len(self.type_to_idx)]),
+            'positive_items': target_features if label == 1 else torch.randn_like(target_features),
+            'negative_items': target_features if label == -1 else torch.randn_like(target_features),
+            'label': torch.tensor(label)
+        }
+        
+        return sample
+
+class SyntheticBPGDataset(ComplementaryDataset):
+    """Dataset that uses synthetic BPG for training"""
+    
+    def __init__(self, config: 'Config', mode: str = 'train'):
+        from .synthetic_data import SyntheticDataGenerator
+        
+        # Generate synthetic data
+        generator = SyntheticDataGenerator(config)
+        bpg = generator.generate_bpg()
+        
+        super().__init__(bpg, config, mode)
+
+def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    """Custom collate function to handle variable-sized data"""
+    batch_dict = defaultdict(list)
+    
+    for sample in batch:
+        for key, value in sample.items():
+            # Special handling for neighbor features
+            if key == 'anchor_neighbors':
+                if value is not None:
+                    if not isinstance(value, torch.Tensor):
+                        value = torch.stack(value)
+                batch_dict[key].append(value)
+            else:
+                batch_dict[key].append(value)
+    
+    # Stack tensors (except neighbor features)
+    for key in batch_dict:
+        if key != 'anchor_neighbors':
+            batch_dict[key] = torch.stack(batch_dict[key])
+    
+    return dict(batch_dict)

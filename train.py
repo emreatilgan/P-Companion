@@ -9,14 +9,15 @@ from config import Config
 from src.models.p_companion import PCompanion
 from src.data.data_loader import SyntheticBPGDataset, collate_fn
 from src.utils.metrics import Metrics
+from scripts.pretrain_product2vec import pretrain_product2vec
 
-def train(config, train_loader, val_loader):
+def train(config, train_loader, val_loader, pretrained_embeddings):
     # Set up logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     
-    # Initialize model
-    model = PCompanion(config).to(config.DEVICE)
+    # Initialize model with pretrained embeddings
+    model = PCompanion(config, pretrained_embeddings).to(config.DEVICE)
     
     # Initialize optimizer
     optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE)
@@ -74,6 +75,12 @@ def main():
     # Create model directory if it doesn't exist
     os.makedirs(config.MODEL_DIR, exist_ok=True)
     
+    # First, pretrain Product2Vec
+    logger = logging.getLogger(__name__)
+    logger.info("Starting Product2Vec pretraining...")
+    pretrained_embeddings = pretrain_product2vec(config)
+    logger.info("Product2Vec pretraining completed")
+    
     # Create synthetic datasets
     train_dataset = SyntheticBPGDataset(config, mode='train')
     val_dataset = SyntheticBPGDataset(config, mode='val')
@@ -95,8 +102,10 @@ def main():
         num_workers=2
     )
     
-    # Start training
-    train(config, train_loader, val_loader)
+    # Start P-Companion training
+    logger.info("Starting P-Companion training...")
+    train(config, train_loader, val_loader, pretrained_embeddings)
+    logger.info("Training completed")
 
 if __name__ == "__main__":
     main()

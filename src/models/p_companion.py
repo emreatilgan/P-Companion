@@ -11,19 +11,18 @@ class PCompanion(nn.Module):
         super().__init__()
         self.config = config
         
-        # Create embedding layer from pretrained embeddings
-        num_products = len(pretrained_embeddings)
-        embedding_dim = config.PRODUCT_EMB_DIM
+        # Create product mapping and embedding matrix
+        product_ids = list(pretrained_embeddings.keys())
+        self.product_to_idx = {pid: idx for idx, pid in enumerate(product_ids)}
         
-        # Convert dictionary to tensor
-        embedding_matrix = torch.zeros(num_products, embedding_dim)
-        self.product_to_idx = {}
+        # Create embedding matrix from pretrained embeddings
+        embedding_dim = next(iter(pretrained_embeddings.values())).size(0)
+        embedding_matrix = torch.zeros(len(product_ids), embedding_dim)
         
-        for idx, (pid, emb) in enumerate(pretrained_embeddings.items()):
-            embedding_matrix[idx] = emb
-            self.product_to_idx[pid] = idx
-            
-        # Create frozen embedding layer
+        for pid, idx in self.product_to_idx.items():
+            embedding_matrix[idx] = pretrained_embeddings[pid]
+        
+        # Create frozen embedding layer with pretrained embeddings
         self.product_embeddings = nn.Embedding.from_pretrained(
             embedding_matrix,
             freeze=True  # Keep pretrained embeddings fixed
@@ -43,18 +42,13 @@ class PCompanion(nn.Module):
             config.TYPE_EMB_DIM
         )
         
-    def get_product_embedding(self, product_id: str) -> torch.Tensor:
-        """Get pretrained embedding for a product"""
-        idx = self.product_to_idx[product_id]
-        return self.product_embeddings(torch.tensor([idx]).to(self.config.DEVICE))
-        
-    def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, batch):
         # Get product embeddings using pretrained embeddings
-        query_embeddings = self.product_embeddings(
-            torch.tensor([
-                self.product_to_idx[pid] for pid in batch['query_ids']
-            ]).to(self.config.DEVICE)
-        )
+        query_indices = torch.tensor([
+            self.product_to_idx[pid] for pid in batch['query_ids']
+        ]).to(self.config.DEVICE)
+        
+        query_embeddings = self.product_embeddings(query_indices)
         
         # Get type embeddings
         query_type_emb = self.query_type_embeddings(batch['query_types'])
@@ -81,53 +75,45 @@ class PCompanion(nn.Module):
             'complementary_types': top_k_types.indices,
             'type_similarities': similarities
         }
-    
-    #def compute_loss(self, batch, outputs):
-    #    """Compute combined loss for type transition and item prediction"""
-    #    type_loss = self._compute_type_loss(
-    #        outputs['type_similarities'],
-    #        batch['positive_types'].squeeze(-1),  # Remove extra dimension
-    #        batch['negative_types'].squeeze(-1)   # Remove extra dimension
-    #    )
-    #    
-    #    item_loss = self._compute_item_loss(
-    #        outputs['projected_embeddings'],
-    #        batch['positive_items'],
-    #        batch['negative_items']
-    #    )
-    #    
-    #    return self.config.ALPHA * item_loss + (1 - self.config.ALPHA) * type_loss
 
-    #def _compute_type_loss(self, type_similarities, positive_types, negative_types):
-    #    """Compute hinge loss for type transition
-    #    
-    #    Args:
-    #        type_similarities: [batch_size, num_types]
-    #        positive_types: [batch_size]
-    #        negative_types: [batch_size]
-    #    """
-    #    positive_scores = type_similarities[torch.arange(type_similarities.size(0)), positive_types]
-    #    negative_scores = type_similarities[torch.arange(type_similarities.size(0)), negative_types]
-    #    
-    #    loss = torch.mean(torch.clamp(
-    #        self.config.MARGIN - positive_scores + negative_scores,
-    #        min=0.0
-    #    ))
-    #    return loss
+    def compute_loss(self, batch, outputs):
+        """Compute combined loss for type transition and item prediction"""
+        type_loss = self._compute_type_loss(
+            outputs['type_similarities'],
+            batch['positive_types'].squeeze(-1),
+            batch['negative_types'].squeeze(-1)
+        )
+        
+        item_loss = self._compute_item_loss(
+            outputs['projected_embeddings'],
+            batch['positive_items'],
+            batch['negative_items']
+        )
+        
+        return self.config.ALPHA * item_loss + (1 - self.config.ALPHA) * type_loss
 
-    #def _compute_item_loss(self, projected_embeddings, positive_items, negative_items):
-    #    """Compute hinge loss for item prediction"""
-    #    pos_distances = torch.norm(
-    #        projected_embeddings - positive_items.unsqueeze(1),
-    #        dim=-1
-    #    )
-    #    neg_distances = torch.norm(
-    #        projected_embeddings - negative_items.unsqueeze(1),
-    #        dim=-1
-    #    )
-    #    
-    #    loss = torch.mean(torch.clamp(
-    #        self.config.MARGIN - pos_distances + neg_distances,
-    #        min=0.0
-    #    ))
-    #    return loss
+    def _compute_type_loss(self, type_similarities, positive_types, negative_types):
+        positive_scores = type_similarities[torch.arange(type_similarities.size(0)), positive_types]
+        negative_scores = type_similarities[torch.arange(type_similarities.size(0)), negative_types]
+        
+        loss = torch.mean(torch.clamp(
+            self.config.MARGIN - positive_scores + negative_scores,
+            min=0.0
+        ))
+        return loss
+
+    def _compute_item_loss(self, projected_embeddings, positive_items, negative_items):
+        pos_distances = torch.norm(
+            projected_embeddings - positive_items.unsqueeze(1),
+            dim=-1
+        )
+        neg_distances = torch.norm(
+            projected_embeddings - negative_items.unsqueeze(1),
+            dim=-1
+        )
+        
+        loss = torch.mean(torch.clamp(
+            self.config.MARGIN - pos_distances + neg_distances,
+            min=0.0
+        ))
+        return loss

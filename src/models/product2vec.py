@@ -1,40 +1,23 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, List
-
-class FeedForwardNetwork(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
-        super().__init__()
-        self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.batch_norm = nn.BatchNorm1d(hidden_dim)
-        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = nn.Linear(hidden_dim, output_dim)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = torch.tanh(self.layer1(x))
-        if x.dim() > 2:
-            # Handle batched sequences
-            batch_size, seq_len, hidden_dim = x.size()
-            x = x.view(-1, hidden_dim)
-            x = self.batch_norm(x)
-            x = x.view(batch_size, seq_len, hidden_dim)
-        else:
-            x = self.batch_norm(x)
-        x = torch.tanh(self.layer2(x))
-        x = self.layer3(x)
-        return x
+from tqdm import tqdm
+import logging
+from typing import Dict, Optional, Tuple
 
 class Product2Vec(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         
-        # Feed-forward network for initial embeddings
-        self.ffn = FeedForwardNetwork(
-            input_dim=config.PRODUCT_EMB_DIM,
-            hidden_dim=config.HIDDEN_SIZE,
-            output_dim=config.PRODUCT_EMB_DIM
+        # Feed-forward network for initial embeddings (FFN)
+        self.ffn = nn.Sequential(
+            nn.Linear(config.PRODUCT_EMB_DIM, config.HIDDEN_SIZE),
+            nn.BatchNorm1d(config.HIDDEN_SIZE),
+            nn.Tanh(),
+            nn.Linear(config.HIDDEN_SIZE, config.HIDDEN_SIZE),
+            nn.Tanh(),
+            nn.Linear(config.HIDDEN_SIZE, config.PRODUCT_EMB_DIM)
         )
         
         # Graph attention layer
@@ -45,52 +28,143 @@ class Product2Vec(nn.Module):
             batch_first=True
         )
         
-    def forward(self, catalog_features: torch.Tensor, 
-                neighbor_features: Optional[List[torch.Tensor]] = None) -> torch.Tensor:
-        """
-        Forward pass through Product2Vec model
+    def get_initial_embedding(self, features: torch.Tensor) -> torch.Tensor:
+        """Get initial embedding through FFN"""
+        if features.dim() == 1:
+            # Single feature vector: [D] -> [1, D] -> [D]
+            return self.ffn(features.unsqueeze(0)).squeeze(0)
+        elif features.dim() == 2:
+            # Batch of feature vectors: [B, D] -> [B, D]
+            return self.ffn(features)
+        elif features.dim() == 3:
+            # Batch of multiple vectors: [B, N, D] -> [B*N, D] -> [B, N, D]
+            B, N, D = features.shape
+            features = features.reshape(-1, D)
+            embeddings = self.ffn(features)
+            return embeddings.reshape(B, N, -1)
+        else:
+            raise ValueError(f"Unexpected input dimension: {features.dim()}")
+    
+    def apply_attention(self, query: torch.Tensor, key_value: torch.Tensor) -> torch.Tensor:
+        """Apply attention mechanism with proper reshaping"""
+        # Make sure inputs are 3D: [batch_size, seq_len, embed_dim]
+        if query.dim() == 1:
+            query = query.unsqueeze(0).unsqueeze(0)  # [D] -> [1, 1, D]
+        elif query.dim() == 2:
+            query = query.unsqueeze(1)  # [B, D] -> [B, 1, D]
+            
+        if key_value.dim() == 2:
+            key_value = key_value.unsqueeze(0)  # [N, D] -> [1, N, D]
+            
+        # Apply attention
+        attn_output, _ = self.attention(query, key_value, key_value)
         
-        Args:
-            catalog_features: Tensor of shape [batch_size, product_emb_dim]
-            neighbor_features: Optional list of neighbor feature tensors
+        # Remove extra dimensions if they were added
+        if query.size(0) == 1 and query.size(1) == 1:
+            attn_output = attn_output.squeeze(0).squeeze(0)
+        elif query.size(1) == 1:
+            attn_output = attn_output.squeeze(1)
             
-        Returns:
-            Tensor of shape [batch_size, product_emb_dim]
-        """
-        # Generate initial embeddings
-        embeddings = self.ffn(catalog_features)
+        return attn_output
+    
+    def forward(self, features: torch.Tensor, neighbors: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Forward pass through Product2Vec model"""
+        # Get initial embeddings through FFN
+        embeddings = self.get_initial_embedding(features)
         
-        if neighbor_features is not None and len(neighbor_features) > 0:
-            # Process each batch item separately since they might have different numbers of neighbors
-            batch_size = catalog_features.size(0)
-            processed_embeddings = []
-            
-            for i in range(batch_size):
-                if isinstance(neighbor_features[i], torch.Tensor):
-                    # Get neighbor embeddings for current item
-                    current_neighbors = neighbor_features[i]  # [num_neighbors, emb_dim]
-                    
-                    if current_neighbors.dim() == 1:
-                        # Single neighbor case
-                        current_neighbors = current_neighbors.unsqueeze(0)
-                    
-                    # Apply attention
-                    query = embeddings[i].unsqueeze(0)  # [1, emb_dim]
-                    key = current_neighbors
-                    value = current_neighbors
-                    
-                    attn_output, _ = self.attention(
-                        query.unsqueeze(0),
-                        key.unsqueeze(0),
-                        value.unsqueeze(0)
-                    )
-                    
-                    processed_embeddings.append(attn_output.squeeze(0))
-                else:
-                    # No neighbors case - use original embedding
-                    processed_embeddings.append(embeddings[i].unsqueeze(0))
-            
-            # Combine processed embeddings
-            embeddings = torch.cat(processed_embeddings, dim=0)
-            
+        # Apply attention if neighbors are provided
+        if neighbors is not None and neighbors.size(0) > 0:
+            # Get initial embeddings for neighbors
+            neighbor_embeddings = self.get_initial_embedding(neighbors)
+            embeddings = self.apply_attention(embeddings, neighbor_embeddings)
+        
         return embeddings
+    
+    def generate_all_embeddings(self, bpg) -> Dict[str, torch.Tensor]:
+        """Generate embeddings for all products in the BPG"""
+        self.eval()
+        embeddings_dict = {}
+        
+        with torch.no_grad():
+            # First pass: Get initial embeddings
+            for product_id, product_data in tqdm(bpg.nodes.items(), desc="Generating initial embeddings"):
+                features = product_data['features'].to(self.config.DEVICE)
+                initial_emb = self.get_initial_embedding(features)
+                embeddings_dict[product_id] = initial_emb.cpu()
+            
+            # Second pass: Update with neighbor information
+            for product_id in tqdm(bpg.nodes.keys(), desc="Aggregating neighbor information"):
+                neighbors = bpg.get_neighbors(product_id, edge_type='co_view')
+                if neighbors:
+                    # Get neighbor features and embeddings
+                    neighbor_features = torch.stack([
+                        bpg.nodes[n_id]['features'] for n_id in neighbors
+                    ]).to(self.config.DEVICE)
+                    
+                    # Get current embedding
+                    emb = embeddings_dict[product_id].to(self.config.DEVICE)
+                    
+                    # Update embedding with neighbor information
+                    updated_emb = self(emb, neighbor_features)
+                    embeddings_dict[product_id] = updated_emb.cpu()
+        
+        return embeddings_dict
+    
+    def train_model(self, train_loader, optimizer, num_epochs=10) -> Dict[str, torch.Tensor]:
+        """Train Product2Vec model and generate embeddings for all products"""
+        device = self.config.DEVICE
+        logger = logging.getLogger(__name__)
+        self.to(device)
+        
+        # Training loop
+        for epoch in range(num_epochs):
+            self.train()
+            total_loss = 0.0
+            num_batches = 0
+            
+            with tqdm(train_loader, desc=f'Product2Vec Epoch {epoch+1}/{num_epochs}') as pbar:
+                for batch in pbar:
+                    # Move batch to device
+                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                            for k, v in batch.items()}
+                    
+                    # Get embeddings
+                    anchor_emb = self(batch['anchor'], batch.get('anchor_neighbors'))
+                    positive_emb = self(batch['positive'])
+                    negative_emb = self(batch['negative'])
+                    
+                    # Compute positive distances
+                    pos_distance = F.pairwise_distance(anchor_emb, positive_emb)
+                    
+                    # Handle multiple negative samples
+                    if negative_emb.dim() == 3:
+                        anchor_expanded = anchor_emb.unsqueeze(1).expand(-1, negative_emb.size(1), -1)
+                        neg_distance = torch.mean(
+                            F.pairwise_distance(
+                                anchor_expanded,
+                                negative_emb,
+                                p=2
+                            ),
+                            dim=1
+                        )
+                    else:
+                        neg_distance = F.pairwise_distance(anchor_emb, negative_emb)
+                    
+                    # Compute triplet loss
+                    loss = F.relu(self.config.MARGIN - pos_distance + neg_distance).mean()
+                    
+                    # Backward pass
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    
+                    # Update progress
+                    total_loss += loss.item()
+                    num_batches += 1
+                    pbar.set_postfix({'loss': total_loss / num_batches})
+            
+            logger.info(f'Epoch {epoch+1}/{num_epochs}, Loss: {total_loss/num_batches:.4f}')
+        
+        # After training, generate embeddings for all products
+        self.eval()
+        return self.generate_all_embeddings(train_loader.dataset.bpg)

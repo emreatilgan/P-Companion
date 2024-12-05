@@ -1,18 +1,34 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Dict, Optional
 
-from .product2vec import Product2Vec
 from .type_transition import ComplementaryTypeTransition
 from .item_prediction import ComplementaryItemPrediction
 
 class PCompanion(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, pretrained_embeddings: Dict[str, torch.Tensor]):
         super().__init__()
         self.config = config
         
-        # Initialize all components
-        self.product2vec = Product2Vec(config)
+        # Create product mapping and embedding matrix
+        product_ids = list(pretrained_embeddings.keys())
+        self.product_to_idx = {pid: idx for idx, pid in enumerate(product_ids)}
+        
+        # Create embedding matrix from pretrained embeddings
+        embedding_dim = next(iter(pretrained_embeddings.values())).size(0)
+        embedding_matrix = torch.zeros(len(product_ids), embedding_dim)
+        
+        for pid, idx in self.product_to_idx.items():
+            embedding_matrix[idx] = pretrained_embeddings[pid]
+        
+        # Create frozen embedding layer with pretrained embeddings
+        self.product_embeddings = nn.Embedding.from_pretrained(
+            embedding_matrix,
+            freeze=True  # Keep pretrained embeddings fixed
+        )
+        
+        # Initialize other components
         self.type_transition = ComplementaryTypeTransition(config)
         self.item_prediction = ComplementaryItemPrediction(config)
         
@@ -27,11 +43,12 @@ class PCompanion(nn.Module):
         )
         
     def forward(self, batch):
-        # Get product embeddings
-        query_embeddings = self.product2vec(
-            batch['query_features'],
-            batch.get('query_neighbor_features', None)
-        )
+        # Get product embeddings using pretrained embeddings
+        query_indices = torch.tensor([
+            self.product_to_idx[pid] for pid in batch['query_ids']
+        ]).to(self.config.DEVICE)
+        
+        query_embeddings = self.product_embeddings(query_indices)
         
         # Get type embeddings
         query_type_emb = self.query_type_embeddings(batch['query_types'])
@@ -56,15 +73,15 @@ class PCompanion(nn.Module):
         return {
             'projected_embeddings': projected_embeddings,
             'complementary_types': top_k_types.indices,
-            'type_similarities': similarities  # Return full similarities
+            'type_similarities': similarities
         }
 
     def compute_loss(self, batch, outputs):
         """Compute combined loss for type transition and item prediction"""
         type_loss = self._compute_type_loss(
             outputs['type_similarities'],
-            batch['positive_types'].squeeze(-1),  # Remove extra dimension
-            batch['negative_types'].squeeze(-1)   # Remove extra dimension
+            batch['positive_types'].squeeze(-1),
+            batch['negative_types'].squeeze(-1)
         )
         
         item_loss = self._compute_item_loss(
@@ -76,13 +93,6 @@ class PCompanion(nn.Module):
         return self.config.ALPHA * item_loss + (1 - self.config.ALPHA) * type_loss
 
     def _compute_type_loss(self, type_similarities, positive_types, negative_types):
-        """Compute hinge loss for type transition
-        
-        Args:
-            type_similarities: [batch_size, num_types]
-            positive_types: [batch_size]
-            negative_types: [batch_size]
-        """
         positive_scores = type_similarities[torch.arange(type_similarities.size(0)), positive_types]
         negative_scores = type_similarities[torch.arange(type_similarities.size(0)), negative_types]
         
@@ -93,7 +103,6 @@ class PCompanion(nn.Module):
         return loss
 
     def _compute_item_loss(self, projected_embeddings, positive_items, negative_items):
-        """Compute hinge loss for item prediction"""
         pos_distances = torch.norm(
             projected_embeddings - positive_items.unsqueeze(1),
             dim=-1

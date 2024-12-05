@@ -30,15 +30,26 @@ class Product2Vec(nn.Module):
         
     def get_initial_embedding(self, features: torch.Tensor) -> torch.Tensor:
         """Get initial embedding through FFN"""
+        original_shape = features.shape
+        
         if features.dim() == 1:
             # Single feature vector
             features = features.unsqueeze(0)  # Add batch dimension
-            return self.ffn(features).squeeze(0)  # Remove batch dimension
+            embeddings = self.ffn(features).squeeze(0)  # Remove batch dimension
         elif features.dim() == 2:
             # Batch of feature vectors
-            return self.ffn(features)
+            embeddings = self.ffn(features)
+        elif features.dim() == 3:
+            # Batch of multiple feature vectors per sample
+            # Reshape to 2D for batch norm, then back to 3D
+            batch_size, num_samples, feat_dim = features.shape
+            features = features.view(-1, feat_dim)
+            embeddings = self.ffn(features)
+            embeddings = embeddings.view(batch_size, num_samples, -1)
         else:
             raise ValueError(f"Unexpected input dimension: {features.dim()}")
+            
+        return embeddings
     
     def forward(self, features: torch.Tensor, neighbors: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Forward pass through Product2Vec model"""
@@ -61,31 +72,13 @@ class Product2Vec(nn.Module):
                 neighbors.unsqueeze(0) if neighbors.dim() == 2 else neighbors
             )
             
-            # Remove extra dimensions
-            if attn_output.size(0) == 1:
-                attn_output = attn_output.squeeze(0)
-            if attn_output.size(0) == 1:
-                attn_output = attn_output.squeeze(0)
+            # Remove extra dimensions if needed
+            if attn_output.dim() > embeddings.dim():
+                attn_output = attn_output.squeeze(1)
                 
             embeddings = attn_output
         
         return embeddings
-    
-    def _compute_loss(self, anchor_emb: torch.Tensor, 
-                     positive_emb: torch.Tensor,
-                     negative_emb: torch.Tensor) -> torch.Tensor:
-        """Compute triplet loss for similar/dissimilar items"""
-        # Expand anchor to match negative samples
-        anchor_emb = anchor_emb.unsqueeze(1).expand(-1, negative_emb.size(1), -1)
-        positive_emb = positive_emb.unsqueeze(1).expand(-1, negative_emb.size(1), -1)
-        
-        # Compute distances
-        pos_distance = F.pairwise_distance(anchor_emb, positive_emb, p=2, keepdim=True)
-        neg_distance = F.pairwise_distance(anchor_emb, negative_emb, p=2, keepdim=True)
-        
-        # Compute triplet loss
-        loss = F.relu(pos_distance - neg_distance + self.config.MARGIN)
-        return loss.mean()
     
     def generate_all_embeddings(self, bpg) -> Dict[str, torch.Tensor]:
         """Generate embeddings for all products in the BPG"""
@@ -147,12 +140,11 @@ class Product2Vec(nn.Module):
                     if negative_emb.dim() == 3:
                         # Expand anchor to match negative samples
                         anchor_emb = anchor_emb.unsqueeze(1).expand(-1, negative_emb.size(1), -1)
-                    
-                    neg_distance = F.pairwise_distance(
-                        anchor_emb,
-                        negative_emb,
-                        keepdim=True if negative_emb.dim() == 3 else False
-                    ).mean(dim=1) if negative_emb.dim() == 3 else F.pairwise_distance(anchor_emb, negative_emb)
+                        neg_distance = F.pairwise_distance(
+                            anchor_emb, negative_emb, keepdim=True
+                        ).mean(dim=1)
+                    else:
+                        neg_distance = F.pairwise_distance(anchor_emb, negative_emb)
                     
                     loss = F.relu(self.config.MARGIN - pos_distance + neg_distance).mean()
                     

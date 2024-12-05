@@ -30,12 +30,15 @@ class Product2Vec(nn.Module):
         
     def get_initial_embedding(self, features: torch.Tensor) -> torch.Tensor:
         """Get initial embedding through FFN"""
-        if features.dim() == 2:
+        if features.dim() == 1:
+            # Single feature vector
+            features = features.unsqueeze(0)  # Add batch dimension
+            return self.ffn(features).squeeze(0)  # Remove batch dimension
+        elif features.dim() == 2:
+            # Batch of feature vectors
             return self.ffn(features)
         else:
-            batch_size = features.size(0)
-            embeddings = self.ffn(features.view(-1, features.size(-1)))
-            return embeddings.view(batch_size, -1, self.config.PRODUCT_EMB_DIM)
+            raise ValueError(f"Unexpected input dimension: {features.dim()}")
     
     def forward(self, features: torch.Tensor, neighbors: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Forward pass through Product2Vec model"""
@@ -43,13 +46,28 @@ class Product2Vec(nn.Module):
         embeddings = self.get_initial_embedding(features)
         
         if neighbors is not None and neighbors.size(0) > 0:
-            # Apply attention over neighbors
+            # Make sure embeddings have batch dimension
+            if embeddings.dim() == 1:
+                embeddings = embeddings.unsqueeze(0)
+            
+            # Add sequence dimension if needed
+            if embeddings.dim() == 2:
+                embeddings = embeddings.unsqueeze(1)
+            
+            # Apply attention
             attn_output, _ = self.attention(
-                embeddings.unsqueeze(1) if embeddings.dim() == 2 else embeddings,
-                neighbors,
-                neighbors
+                embeddings,
+                neighbors.unsqueeze(0) if neighbors.dim() == 2 else neighbors,
+                neighbors.unsqueeze(0) if neighbors.dim() == 2 else neighbors
             )
-            embeddings = attn_output.squeeze(1) if embeddings.dim() == 2 else attn_output
+            
+            # Remove extra dimensions
+            if attn_output.size(0) == 1:
+                attn_output = attn_output.squeeze(0)
+            if attn_output.size(0) == 1:
+                attn_output = attn_output.squeeze(0)
+                
+            embeddings = attn_output
         
         return embeddings
     
@@ -79,7 +97,7 @@ class Product2Vec(nn.Module):
             for product_id, product_data in tqdm(bpg.nodes.items(), desc="Generating initial embeddings"):
                 features = product_data['features'].to(self.config.DEVICE)
                 initial_emb = self.get_initial_embedding(features)
-                embeddings_dict[product_id] = initial_emb
+                embeddings_dict[product_id] = initial_emb.cpu()  # Store on CPU to save memory
             
             # Then, update embeddings with neighbor information where applicable
             for product_id in tqdm(bpg.nodes.keys(), desc="Aggregating neighbor information"):
@@ -90,11 +108,9 @@ class Product2Vec(nn.Module):
                     ]).to(self.config.DEVICE)
                     
                     # Get updated embedding with neighbor information
-                    updated_emb = self(
-                        embeddings_dict[product_id].unsqueeze(0),
-                        neighbor_features.unsqueeze(0)
-                    )
-                    embeddings_dict[product_id] = updated_emb.squeeze(0)
+                    emb = embeddings_dict[product_id].to(self.config.DEVICE)
+                    updated_emb = self(emb, neighbor_features)
+                    embeddings_dict[product_id] = updated_emb.cpu()
         
         return embeddings_dict
     
@@ -123,13 +139,20 @@ class Product2Vec(nn.Module):
                     
                     # Compute loss
                     pos_distance = F.pairwise_distance(
-                        anchor_emb, 
-                        positive_emb.unsqueeze(1) if positive_emb.dim() == 2 else positive_emb
+                        anchor_emb,
+                        positive_emb
                     )
+                    
+                    # Handle multiple negative samples
+                    if negative_emb.dim() == 3:
+                        # Expand anchor to match negative samples
+                        anchor_emb = anchor_emb.unsqueeze(1).expand(-1, negative_emb.size(1), -1)
+                    
                     neg_distance = F.pairwise_distance(
-                        anchor_emb.unsqueeze(1) if negative_emb.dim() == 3 else anchor_emb,
-                        negative_emb
-                    ).mean(dim=1)
+                        anchor_emb,
+                        negative_emb,
+                        keepdim=True if negative_emb.dim() == 3 else False
+                    ).mean(dim=1) if negative_emb.dim() == 3 else F.pairwise_distance(anchor_emb, negative_emb)
                     
                     loss = F.relu(self.config.MARGIN - pos_distance + neg_distance).mean()
                     

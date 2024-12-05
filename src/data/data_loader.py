@@ -1,7 +1,8 @@
 # src/data/data_loader.py
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import random
+import logging
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 from src.data.bpg import BehaviorProductGraph
@@ -13,29 +14,16 @@ class SimilarityDataset(Dataset):
     def __init__(self, bpg: 'BehaviorProductGraph', config: 'Config'):
         self.bpg = bpg
         self.config = config
+        self.logger = logging.getLogger(__name__)
         
-        # Get similarity pairs from BPG
-        self.similar_pairs = self._get_similarity_pairs()
+        # Use similarity pairs: (Bcv ∩ Bpv) - Bcp
+        self.similar_pairs = bpg.similarity_pairs
+        
         if len(self.similar_pairs) == 0:
-            raise ValueError("No similarity pairs found in BPG. Check data generation.")
+            raise ValueError("No similarity pairs found in BPG")
             
-        print(f"Generated {len(self.similar_pairs)} similarity pairs for training.")
+        self.logger.info(f"Created similarity dataset with {len(self.similar_pairs)} pairs")
         
-    def _get_similarity_pairs(self) -> List[Tuple[str, str]]:
-        """Extract similarity pairs from BPG based on co-view and purchase-after-view"""
-        co_view_pairs = set(self.bpg.edges['co_view'])
-        pav_pairs = set(self.bpg.edges['purchase_after_view'])
-        co_purchase = set(self.bpg.edges['co_purchase'])
-        
-        # Get pairs that are in both co_view and purchase_after_view but not in co_purchase
-        similarity_pairs = list((co_view_pairs & pav_pairs) - co_purchase)
-        
-        # If we don't have enough similarity pairs, include all co-view pairs
-        if len(similarity_pairs) < 100:  # Minimum threshold
-            similarity_pairs = list(co_view_pairs - co_purchase)
-            
-        return similarity_pairs
-    
     def _get_negative_samples(self, anchor_id: str, k: int = 5) -> List[str]:
         """Get multiple negative samples for the anchor"""
         neg_ids = []
@@ -59,18 +47,18 @@ class SimilarityDataset(Dataset):
         negative_ids = self._get_negative_samples(anchor_id)
         
         # Get features
-        anchor_features = self.bpg.nodes[anchor_id]['features']
-        positive_features = self.bpg.nodes[positive_id]['features']
-        negative_features = torch.stack([
-            self.bpg.nodes[neg_id]['features'] 
+        anchor = self.bpg.nodes[anchor_id]['features'].clone().detach()
+        positive = self.bpg.nodes[positive_id]['features'].clone().detach()
+        negative = torch.stack([
+            self.bpg.nodes[neg_id]['features'].clone().detach() 
             for neg_id in negative_ids
         ])
         
         sample = {
             'anchor_ids': anchor_id,
-            'anchor': anchor_features,
-            'positive': positive_features,
-            'negative': negative_features,
+            'anchor': anchor,
+            'positive': positive,
+            'negative': negative,
             'positive_id': positive_id,
             'negative_ids': negative_ids
         }
@@ -84,14 +72,16 @@ class SimilarityDataset(Dataset):
     
     def _get_neighbor_features(self, product_id: str) -> Optional[torch.Tensor]:
         """Get neighbor features for a product"""
-        neighbors = self.bpg.get_neighbors(product_id)
+        neighbors = self.bpg.get_neighbors(product_id, edge_type='co_view')
         if not neighbors:
             return None
             
         neighbor_features = []
         for n_id in neighbors:
             if n_id in self.bpg.nodes:
-                neighbor_features.append(self.bpg.nodes[n_id]['features'])
+                neighbor_features.append(
+                    self.bpg.nodes[n_id]['features'].clone().detach()
+                )
                 
         if neighbor_features:
             return torch.stack(neighbor_features)
@@ -104,29 +94,28 @@ class ComplementaryDataset(Dataset):
         self.bpg = bpg
         self.config = config
         self.mode = mode
+        self.logger = logging.getLogger(__name__)
         
-        # Get complementary pairs from BPG
+        # Use complementary pairs: Bcp - (Bpv ∪ Bcv)
         self.pairs = self._create_product_pairs()
         
         # Create type mappings
         self.type_to_idx = {t: i for i, t in enumerate(bpg.get_all_types())}
         self.idx_to_type = {i: t for t, i in self.type_to_idx.items()}
         
+        self.logger.info(f"Created {mode} complementary dataset with {len(self.pairs)} pairs")
+        
     def _create_product_pairs(self) -> List[Tuple[str, str, int]]:
         """Create training pairs based on behavior data"""
         all_pairs = []
         
-        # Positive pairs from exclusive co-purchase data
-        positive_pairs = [(src, tgt, 1) for src, tgt in self.bpg.edges['co_purchase']
-                         if (src, tgt) not in self.bpg.edges['co_view']]
+        # Positive pairs from complementary relationships
+        all_pairs.extend((src, tgt, 1) for src, tgt in self.bpg.complementary_pairs)
         
-        # Negative pairs from co-view ∩ purchase-after-view
-        co_view = set(self.bpg.edges['co_view'])
-        pav = set(self.bpg.edges['purchase_after_view'])
-        negative_pairs = [(src, tgt, -1) for src, tgt in (co_view & pav)]
+        # Negative pairs from similarity pairs
+        all_pairs.extend((src, tgt, -1) for src, tgt in self.bpg.similarity_pairs)
         
-        all_pairs.extend(positive_pairs)
-        all_pairs.extend(negative_pairs)
+        # Shuffle pairs
         random.shuffle(all_pairs)
         
         # Split based on mode
@@ -141,20 +130,19 @@ class ComplementaryDataset(Dataset):
     def __len__(self) -> int:
         return len(self.pairs)
     
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         query_id, target_id, label = self.pairs[idx]
         
-        # Get product features and types
+        # Get product types
         query_type = self.type_to_idx[self.bpg.nodes[query_id]['type']]
         target_type = self.type_to_idx[self.bpg.nodes[target_id]['type']]
         
-        # Convert features to tensors
-        query_features = torch.tensor(self.bpg.nodes[query_id]['features'], dtype=torch.float)
-        target_features = torch.tensor(self.bpg.nodes[target_id]['features'], dtype=torch.float)
+        # Get features
+        query_features = self.bpg.nodes[query_id]['features'].clone().detach()
+        target_features = self.bpg.nodes[target_id]['features'].clone().detach()
         
-        # Create sample
         sample = {
-            'query_ids': query_id,  # Keep as string
+            'query_ids': query_id,
             'query_features': query_features,
             'target_features': target_features,
             'query_types': torch.tensor(query_type),

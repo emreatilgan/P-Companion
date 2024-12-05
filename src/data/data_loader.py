@@ -141,19 +141,20 @@ class ComplementaryDataset(Dataset):
     def __len__(self) -> int:
         return len(self.pairs)
     
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Dict:
         query_id, target_id, label = self.pairs[idx]
         
-        # Get product features
-        query_features = self.bpg.nodes[query_id]['features']
-        target_features = self.bpg.nodes[target_id]['features']
-        
-        # Get product types
+        # Get product features and types
         query_type = self.type_to_idx[self.bpg.nodes[query_id]['type']]
         target_type = self.type_to_idx[self.bpg.nodes[target_id]['type']]
         
+        # Convert features to tensors
+        query_features = torch.tensor(self.bpg.nodes[query_id]['features'], dtype=torch.float)
+        target_features = torch.tensor(self.bpg.nodes[target_id]['features'], dtype=torch.float)
+        
+        # Create sample
         sample = {
-            'query_ids': query_id,
+            'query_ids': query_id,  # Keep as string
             'query_features': query_features,
             'target_features': target_features,
             'query_types': torch.tensor(query_type),
@@ -179,24 +180,39 @@ class SyntheticBPGDataset(ComplementaryDataset):
         
         super().__init__(bpg, config, mode)
 
-def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+def collate_fn(batch: List[Dict]) -> Dict:
     """Custom collate function to handle variable-sized data"""
     batch_dict = defaultdict(list)
     
+    # First, collect all items
     for sample in batch:
         for key, value in sample.items():
-            # Special handling for neighbor features
-            if key == 'anchor_neighbors':
-                if value is not None:
-                    if not isinstance(value, torch.Tensor):
-                        value = torch.stack(value)
-                batch_dict[key].append(value)
-            else:
-                batch_dict[key].append(value)
+            batch_dict[key].append(value)
     
-    # Stack tensors (except neighbor features)
-    for key in batch_dict:
-        if key != 'anchor_neighbors':
-            batch_dict[key] = torch.stack(batch_dict[key])
-    
-    return dict(batch_dict)
+    # Process each key appropriately
+    result_dict = {}
+    for key, values in batch_dict.items():
+        if key in ['anchor_ids', 'positive_id', 'negative_ids', 'query_ids']:
+            # Keep string IDs as lists
+            result_dict[key] = values
+        elif key == 'anchor_neighbors' and values[0] is not None:
+            # Handle neighbor features with padding
+            max_neighbors = max(v.size(0) for v in values if v is not None)
+            padded_values = []
+            for v in values:
+                if v is None:
+                    # Create zero tensor if no neighbors
+                    v = torch.zeros(1, values[0].size(1))
+                if v.size(0) < max_neighbors:
+                    padding = torch.zeros(max_neighbors - v.size(0), v.size(1))
+                    v = torch.cat([v, padding], dim=0)
+                padded_values.append(v)
+            result_dict[key] = torch.stack(padded_values)
+        elif isinstance(values[0], torch.Tensor):
+            # Stack other tensors normally
+            result_dict[key] = torch.stack(values)
+        else:
+            # Keep other types as is
+            result_dict[key] = values
+            
+    return result_dict

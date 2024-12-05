@@ -31,9 +31,11 @@ def train(config, train_loader, val_loader, pretrained_embeddings):
         
         with tqdm(train_loader, desc=f'Epoch {epoch+1}/{config.NUM_EPOCHS}') as pbar:
             for batch_idx, batch in enumerate(pbar):
-                # Move batch to device
-                batch = {k: v.to(config.DEVICE) if torch.is_tensor(v) else v 
-                        for k, v in batch.items()}
+                # Move tensors to device
+                batch = {
+                    k: v.to(config.DEVICE) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
                 
                 # Forward pass
                 outputs = model(batch)

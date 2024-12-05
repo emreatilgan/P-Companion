@@ -5,22 +5,24 @@ import numpy as np
 from collections import defaultdict
 from src.data.data_loader import BehaviorProductGraph
 import logging
+import itertools
 
 class SyntheticDataGenerator:
     def __init__(self, config):
         self.config = config
         self.logger = logging.getLogger(__name__)
         
-        # Synthetic data parameters
-        self.num_products = config.SYNTHETIC_NUM_PRODUCTS
-        self.num_types = 50
-        self.vocab_size = 1000
-        self.title_max_len = 10
+        # Synthetic data parameters - reduced for faster experimentation
+        self.num_products = 1000  # Reduced from 10000
+        self.num_types = 20       # Reduced from 50
+        self.vocab_size = 100     # Reduced from 1000
+        self.title_max_len = 5    # Reduced from 10
         
         # Behavior generation parameters
-        self.co_view_prob = 0.4      # Base probability for co-view
-        self.pav_given_cv_prob = 0.3 # Probability of purchase-after-view given co-view
-        self.cp_given_pav_prob = 0.2 # Probability of co-purchase given purchase-after-view
+        self.sparsity_factor = 0.1  # Only generate edges for 10% of possible pairs
+        self.co_view_prob = 0.3     # Reduced from 0.4
+        self.pav_given_cv_prob = 0.2  # Reduced from 0.3
+        self.cp_given_pav_prob = 0.15  # Reduced from 0.2
         
         # Generate product catalog
         self.products = self._generate_products()
@@ -87,33 +89,54 @@ class SyntheticDataGenerator:
         similarity_pairs = set()  # (Bcv ∩ Bpv) - Bcp
         complementary_pairs = set()  # Bcp - (Bpv ∪ Bcv)
         
-        # Generate edges
+        # Generate all possible pairs
         all_products = list(self.products.keys())
-        for i in range(len(all_products)):
-            for j in range(i + 1, len(all_products)):
-                p1, p2 = all_products[i], all_products[j]
+        all_possible_pairs = list(itertools.combinations(all_products, 2))
+        
+        # Randomly sample pairs based on sparsity factor
+        num_pairs_to_generate = int(len(all_possible_pairs) * self.sparsity_factor)
+        selected_pairs = random.sample(all_possible_pairs, num_pairs_to_generate)
+        
+        # Generate behavioral relationships for selected pairs
+        for p1, p2 in selected_pairs:
+            # First, decide if products are in same category
+            same_category = (self.products[p1]['category'] == 
+                           self.products[p2]['category'])
+            
+            # Adjust probabilities based on category relationship
+            cv_prob = self.co_view_prob * 1.5 if same_category else self.co_view_prob
+            cp_prob = self.cp_given_pav_prob * 0.5 if same_category else self.cp_given_pav_prob
+            
+            if random.random() < cv_prob:
+                bpg.add_edge(p1, p2, 'co_view')
+                stats['co_view'] += 1
                 
-                # Generate behavioral relationships
-                if random.random() < self.co_view_prob:
-                    bpg.add_edge(p1, p2, 'co_view')
-                    stats['co_view'] += 1
+                if random.random() < self.pav_given_cv_prob:
+                    bpg.add_edge(p1, p2, 'purchase_after_view')
+                    stats['purchase_after_view'] += 1
                     
-                    if random.random() < self.pav_given_cv_prob:
-                        bpg.add_edge(p1, p2, 'purchase_after_view')
-                        stats['purchase_after_view'] += 1
-                        
-                        # Track similarity pairs
-                        if random.random() >= self.cp_given_pav_prob:
-                            similarity_pairs.add((p1, p2))
-                        else:
-                            bpg.add_edge(p1, p2, 'co_purchase')
-                            stats['co_purchase'] += 1
-                else:
-                    # Some co-purchases are not co-viewed (complementary products)
-                    if random.random() < self.cp_given_pav_prob:
+                    if random.random() >= cp_prob:
+                        similarity_pairs.add((p1, p2))
+                    else:
                         bpg.add_edge(p1, p2, 'co_purchase')
                         stats['co_purchase'] += 1
-                        complementary_pairs.add((p1, p2))
+            else:
+                # Some co-purchases are not co-viewed (complementary products)
+                if random.random() < cp_prob:
+                    bpg.add_edge(p1, p2, 'co_purchase')
+                    stats['co_purchase'] += 1
+                    complementary_pairs.add((p1, p2))
+        
+        # Ensure we have enough pairs of each type
+        min_required_pairs = 100  # Minimum number of pairs needed for training
+        
+        if len(similarity_pairs) < min_required_pairs or len(complementary_pairs) < min_required_pairs:
+            self.logger.warning("Not enough pairs generated. Adjusting probabilities and regenerating...")
+            # Increase probabilities and try again
+            self.sparsity_factor *= 2
+            self.co_view_prob *= 1.5
+            self.cp_given_pav_prob *= 1.5
+            return self.generate_unified_bpg()
         
         # Log statistics
         self.logger.info("Generated behavior graph with:")

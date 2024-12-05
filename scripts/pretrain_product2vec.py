@@ -6,6 +6,7 @@ import os
 from typing import Dict
 
 from src.models.product2vec import Product2Vec
+from src.data.data_loader import collate_fn  # Import collate_fn from data_loader
 
 def pretrain_product2vec(config, similarity_dataset) -> Dict[str, torch.Tensor]:
     """Pretrain Product2Vec model and save embeddings
@@ -19,13 +20,13 @@ def pretrain_product2vec(config, similarity_dataset) -> Dict[str, torch.Tensor]:
     """
     logger = logging.getLogger(__name__)
     
-    # Create dataloader
+    # Create dataloader with imported collate_fn
     dataloader = DataLoader(
         similarity_dataset,
         batch_size=config.BATCH_SIZE,
         shuffle=True,
         num_workers=2,
-        collate_fn=similarity_dataset.collate_fn
+        collate_fn=collate_fn
     )
     
     # Initialize model and optimizer

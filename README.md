@@ -1,83 +1,105 @@
-# P-Companion: Diversified Complementary Product Recommendation
+# P-Companion Implementation
 
-This is an unofficial implementation of the paper "P-Companion: A Principled Framework for Diversified Complementary Product Recommendation".
-https://assets.amazon.science/d5/16/3f7809974a899a11bacdadefdf24/p-companion-a-principled-framework-for-diversified-complementary-product-recommendation.pdf
+This repository contains an unofficial implementation of the paper ["P-Companion: A Principled Framework for Diversified Complementary Product Recommendation"](https://assets.amazon.science/d5/16/3f7809974a899a11bacdadefdf24/p-companion-a-principled-framework-for-diversified-complementary-product-recommendation.pdf).
 
-## Features
+## Overview
 
-- Product2Vec embeddings using Graph Attention Networks
-- Complementary type transition modeling
-- Type-guided complementary item prediction
-- Support for cold-start products
-- Comprehensive evaluation metrics
+P-Companion is a framework for product recommendations that considers both relevance and diversity. The key innovation is its two-phase approach:
+
+1. Product2Vec Phase:
+   - Pre-trains product embeddings using a graph attention network
+   - Uses co-view and purchase-after-view relationships
+   - Creates foundation embeddings for all products
+
+2. Complementary Learning Phase:
+   - Type transition learning for diversity
+   - Item-level complementary prediction
+   - Multi-task learning approach
 
 ## Project Structure
 
 ```
-.
-├── src/
-│   ├── models/
-│   │   ├── product2vec.py
-│   │   ├── type_transition.py
-│   │   ├── item_prediction.py
-│   │   └── p_companion.py
-│   ├── data/
-│   │   ├── data_loader.py
-│   │   └── bpg.py
-│   │   └── synthetic_data.py
-│   └── utils/
-│       ├── metrics.py
-│       ├── constants.py
-│       ├── preprocessing.py
-│       ├── logger.py
-│       └── evaluation.py
+src/
+├── models/
+│   ├── product2vec.py      # Product2Vec embeddings with GAT
+│   ├── type_transition.py  # Type prediction module
+│   ├── item_prediction.py  # Item prediction module
+│   └── p_companion.py      # Main model integration
+├── data/
+│   ├── data_loader.py      # Data loading utilities
+│   ├── bpg.py              # Behavior Product Graph
+│   └── synthetic_data.py   # Synthetic data generation
+└── utils/
+    ├── metrics.py          # Evaluation metrics
+    └── constants.py        # Model constants
 ├── train.py
-├── inference.py
 ├── config.py
 └── requirements.txt
 ```
 
-## Installation
+## Key Components
 
-1. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate
-```
+### Behavior Product Graph (BPG)
+- Integrates product features and behavioral data
+- Handles three types of edges:
+  * Co-view relationships
+  * Purchase-after-view relationships
+  * Co-purchase relationships
 
-2. Install requirements:
-```bash
-pip install -r requirements.txt
-```
+### Product2Vec
+- Graph attention-based embedding learning
+- Uses (Bcv ∩ Bpv) - Bcp for similarity learning
+- Generates pretrained embeddings for all products
+
+### P-Companion
+- Type Transition Module for diversity
+- Item Prediction Module for relevance
+- Joint learning framework
+
+## Current Status
+
+The implementation includes:
+
+1. Complete end-to-end training pipeline
+2. Synthetic data generation for testing
+3. Evaluation metrics:
+   - Hit@K (K=1,3,10)
+   - Type diversity
+   - Mean relevance
+
+Current performance on synthetic data:
+- Product2Vec Loss: 0.23 (after 10 epochs)
+- P-Companion Best Hit@10: 1.68%
+- Perfect type diversity (1.0)
+- Mean relevance needs improvement
+
+## TODOs and Future Work
+
+1. Model Improvements:
+   - Fine-tune model parameters
+   - Investigate negative mean relevance
+   - Improve embedding quality
+
+2. Data Generation:
+   - Adjust synthetic data distributions
+   - Add more realistic patterns
+   - Better complementary relationship modeling
+
+3. Analysis:
+   - Add embedding visualization
+   - Analyze type transition patterns
+   - Study failure cases
 
 ## Usage
 
-### Training
-
-To train the model:
-
+1. Training the model:
 ```bash
 python train.py
 ```
 
-## Requirements
+## Dependencies
 
-See `requirements.txt` for detailed dependencies:
-
-## Evaluation Metrics
-
-- Hit@K (K=1,3,10,60)
-- Type diversity
-- Mean relevance score
-
-## Configuration
-
-Key configuration parameters in `config.py`:
-
-- PRODUCT_EMB_DIM: Product embedding dimension (128)
-- TYPE_EMB_DIM: Type embedding dimension (64)
-- NUM_COMP_TYPES: Number of complementary types to predict (3)
-- ALPHA: Trade-off parameter between type and item prediction (0.8)
+See `requirements.txt` for detailed dependencies
 
 ## References
 

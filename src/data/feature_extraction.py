@@ -89,6 +89,7 @@ class ProductFeatureExtractor:
         ])
         
         # Project to desired dimension
+        # TODO: get rid of this part
         if combined_embedding.shape[0] != self.config.PRODUCT_EMB_DIM:
             projection = torch.nn.Linear(
                 combined_embedding.shape[0],
@@ -104,17 +105,3 @@ class ProductFeatureExtractor:
         )
         
         return combined_embedding
-
-        
-# Update custom_data_processor.py
-from src.data.feature_extraction import ProductFeatureExtractor
-
-class CustomDataProcessor:
-    def __init__(self, config):
-        self.config = config
-        self.logger = logging.getLogger(__name__)
-        self.feature_extractor = ProductFeatureExtractor(config)
-    
-    def _generate_product_features(self, product_row: pd.Series) -> torch.Tensor:
-        """Generate product features from text data"""
-        return self.feature_extractor.extract_features(product_row)

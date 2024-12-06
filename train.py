@@ -11,6 +11,7 @@ from src.data.synthetic_data import SyntheticDataGenerator
 from src.data.data_loader import SimilarityDataset, ComplementaryDataset, collate_fn
 from src.utils.metrics import Metrics
 from scripts.pretrain_product2vec import pretrain_product2vec
+from src.utils.visualization import EmbeddingVisualizer
 
 def train(config, train_loader, val_loader, pretrained_embeddings):
     """Train P-Companion model"""
@@ -94,6 +95,16 @@ def main():
     logger.info("Starting Product2Vec pretraining...")
     pretrained_embeddings = pretrain_product2vec(config, similarity_dataset)
     logger.info("Product2Vec pretraining completed")
+
+    # Generate visualizations after Product2Vec training
+    logger.info("Generating embedding visualizations...")
+    visualizer = EmbeddingVisualizer(config)
+    viz_path = os.path.join(config.MODEL_DIR, 'embeddings')
+    visualizer.visualize_embeddings(
+        embeddings_dict=pretrained_embeddings,
+        bpg=similarity_dataset.bpg,
+        save_path=viz_path
+    )
     
     # Create P-Companion datasets
     logger.info("Creating complementary datasets for P-Companion training...")

@@ -27,6 +27,10 @@ class Config:
         self.NUM_TYPES = 34800        # Number of product types
         self.SYNTHETIC_NUM_PRODUCTS = 10000  # Number of synthetic products to generate
         self.NEGATIVE_SAMPLE_RATIO = 1.0
+
+        # Feature extraction parameters
+        self.TFIDF_MAX_FEATURES = 1000
+        self.USE_TFIDF = False  # Set to True if you want to use TF-IDF features
         
         # Synthetic data generation parameters
         self.MIN_NEIGHBORS = 3        # Minimum number of neighbors per product

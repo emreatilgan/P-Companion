@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple, Optional
 import logging
 from collections import defaultdict
 from src.data.bpg import BehaviorProductGraph
+from src.data.feature_extraction import ProductFeatureExtractor
 
 class CustomDataProcessor:
     """Process custom dataset into BehaviorProductGraph format"""
@@ -13,6 +14,7 @@ class CustomDataProcessor:
     def __init__(self, config):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.feature_extractor = ProductFeatureExtractor(config)
         
     def process_data(
         self,
@@ -99,10 +101,7 @@ class CustomDataProcessor:
     
     def _generate_product_features(self, product_row: pd.Series) -> torch.Tensor:
         """Generate product features from text data"""
-        # TODO: Implement proper text feature extraction
-        # For now, just return random features
-        self.logger.warning("Using random features - implement proper feature extraction")
-        return torch.randn(self.config.PRODUCT_EMB_DIM)
+        return self.feature_extractor.extract_features(product_row)
     
     def _process_behavior_data(
         self,
